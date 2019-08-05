@@ -1128,7 +1128,8 @@ string SingleSearch(int dlg_mode, string dlg_head, string description, string im
           dlgTextView(DIHtml);  // Gleich anzeigen...
           dlgVBoxLayout dlgSpacing(400);  // flines
         }
-        dlgListView(DIProductListHead ,DIProductList, DIProductSel)
+        int SortByAvailability = -4;
+        dlgListView(DIProductListHead ,DIProductList, DIProductSel, SortByAvailability)
           if (dlgSelectionChanged()) ShowSelection();
           else dlgAccept();
         dlgGroup(tr("Beschreibung") + " EAGLE Part/Device:") {
