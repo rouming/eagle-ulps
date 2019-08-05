@@ -7,12 +7,44 @@
 
 #require 5.1001
 
-string DIVersion = "1.0.7"; // 2010-07-27  reduce global variables
+string MOUSER_API_URL = "https://api.mouser.com/api/v1";
+
+string MOUSER_SRCH_API_KEY = cfgget("ULP:designlink.mouser.search_api_key", "");
+string MOUSER_CART_API_KEY = cfgget("ULP:designlink.mouser.cart_api_key", "");
+
+if (MOUSER_SRCH_API_KEY == "" ||
+    MOUSER_CART_API_KEY == "") {
+    dlgDialog("Mouser API Keys") {
+        dlgHBoxLayout dlgSpacing(400);
+        dlgLabel("Please enter you search API key below");
+        dlgLabel("You can get one at <a href=\"https://www.mouser.de/api-search/\">https://www.mouser.de/api-search/</a>");
+        dlgTextEdit(MOUSER_SRCH_API_KEY);
+        dlgLabel("");
+        dlgLabel("Please enter you cart API key below");
+        dlgLabel("You can get one at <a href=\"https://www.mouser.de/api-cart/\">https://www.mouser.de/api-cart/</a>");
+        dlgTextEdit(MOUSER_CART_API_KEY);
+        dlgPushButton("+Save") {
+            cfgset("ULP:designlink.mouser.search_api_key", MOUSER_SRCH_API_KEY);
+            cfgset("ULP:designlink.mouser.cart_api_key", MOUSER_CART_API_KEY);
+            dlgAccept();
+        }
+        dlgPushButton("-Cancel") {
+            exit(EXIT_FAILURE);
+        }
+    };
+}
+
+// Select API
+int    DIUseMouserAPI = 1;
+
+string DIVersion = "1.0.8"; // 2010-07-27  reduce global variables
                             // 2010-08-12  1.0.1 alf@cadsoft.de
                             // 2010-08-15  1.0.2 alf@cadsoft.de
                             //             techpacvar() berichtigt bei benutzter Platzhalterkombination "*?".
                             // 2010-08-24  1.0.3 alf@cadsoft.de
                             // 2010-08-30  1.0.4 alf@cadsoft.de
+                            // 2019-08-03  1.0.8 r.peniaev@gmail.com
+                            //             Mouser API support
 
 string DILanguage = language();
 
@@ -20,14 +52,14 @@ string DILanguage = language();
 if (DILanguage == "nb")
    DILanguage = "no";
 
-string DICountry = country();
+string DICountry_e14 = country();
 
-if (DICountry == "GB") {
+if (DICountry_e14 == "GB") {
    // According to ISO 3166 (http://www.iso.org/iso/english_country_names_and_code_elements)
    // there is no "en_UK". Computers that use "English/Great Britain" have "en_GB".
    // We set DICountry to the fake value of "UK" to work around this misconception in DesignLink:
-   DICountry = "UK";
-   }
+   DICountry_e14 = "UK";
+}
 
 // Debug stuff
 int    DIDebug = 0;
@@ -45,10 +77,10 @@ int    DIInStockBef = DIInStock, DIRoHSBef = DIRoHS;
 string DISearchKeyBef;
 
 string DICompany = "";                 // Farnell or Newark
-string DICurrency;
-string DISearchURL = "api.element14.com"; // Unified to one URL since May 12
-string DIImageURL;                     // Still old style: One of 4 locations dependent on country :-(((
-string DIShoppingURL;
+string DICurrency_e14;
+string DISearchURL_e14 = "api.element14.com"; // Unified to one URL since May 12
+string DIImageURL_e14;                     // Still old style: One of 4 locations dependent on country :-(((
+string DIShoppingURL_e14;
 
 int    DINrProducts;                   // nr of downloaded products
 int    DINrProductsTotal;              // nr of prod. in Farnell database
@@ -77,6 +109,7 @@ int    DIShow;                         // Show EAGLE part/device
 // EAGLE attribute names
 string DIAttOCFarnell = "OC_FARNELL";  // Attribute name of Farnell order code
 string DIAttOCNewark  = "OC_NEWARK";   // Attribute name of Newark order code
+string DIAttOCMouser  = "OC_MOUSER";   // Attribute name of Mouser order code
 string DIAttOC        = "";            // Attribute name of order code (one of the above, set later)
 string DIAttMF        = "MF";          // Attribute name of manufacturer name
 string DIAttMPN       = "MPN";         // Attribute name of manufacturer part name
@@ -247,7 +280,7 @@ void SaveCfg(void) {
    cfgset("ULP:designlink.SearchHistory", strjoin(DISearchHist, '\t'));
 }
 
-void InitCountryData(void)
+void InitCountryData_e14(void)
 {
   string CountryData[] = {
    "DE EUR 0 de.farnell.com",
@@ -302,45 +335,59 @@ void InitCountryData(void)
     "www.newark.com"
     };
 
-  string rx = "^" + DICountry;
+  string rx = "^" + DICountry_e14;
   for (int i = 0; ; i++) {
       string cd = CountryData[i];
       if (!cd)
          break;
       if (strxstr(cd, rx) == 0) {
-         DICurrency = strsub(cd, 3, 3);
+         DICurrency_e14 = strsub(cd, 3, 3);
          int u = strtol(strsub(cd, 7, 1));
-         DIImageURL = OldURLs[u];
+         DIImageURL_e14 = OldURLs[u];
          // In case the Newark server is the one we contact, we keep to Newark order codes
          // Set device/part attribute keyword accordingly
          DIAttOC = (u == 3) ? DIAttOCNewark : DIAttOCFarnell;
          DICompany = (u == 3) ? "Newark" : "Farnell";
-         DIShoppingURL = strsub(cd, 9);
+         DIShoppingURL_e14 = strsub(cd, 9);
          break;
          }
       }
-  if (!DICurrency || !DISearchURL) {
+  if (!DICurrency_e14 || !DISearchURL_e14) {
      string Msg;
-     sprintf(Msg, "Country '%s' not supported.", DICountry);
+     sprintf(Msg, "Country '%s' not supported.", DICountry_e14);
      dlgMessageBox(Msg);
      exit(1);
-     }
+  }
 }
 
-string GetDesignLinkURL(void)
+void InitCountryData_mouser(void)
 {
-  return "http://" + DISearchURL + "/pffind/services/SearchService";
+    DICompany = "Mouser";
+    DIAttOC = DIAttOCMouser;
 }
 
-string GetImageURL(string Image, int Large, string vrnt)
+void InitCountryData(void)
 {
-  return Image && vrnt ? "https://" + DIImageURL + "/productimages/" + vrnt + (Large ? "standard" : "thumbnail") + Image : "";
+    if (DIUseMouserAPI)
+        InitCountryData_mouser();
+    else
+        InitCountryData_e14();
 }
 
-string GetDataSheetURL(string Url)
+string GetDesignLinkURL_e14(void)
+{
+  return "http://" + DISearchURL_e14 + "/pffind/services/SearchService";
+}
+
+string GetImageURL_e14(string Image, int Large, string vrnt)
+{
+  return Image && vrnt ? "https://" + DIImageURL_e14 + "/productimages/" + vrnt + (Large ? "standard" : "thumbnail") + Image : "";
+}
+
+string GetDataSheetURL_e14(string Url)
 {
   if (Url[0] == '/')
-     Url = "http://" + DISearchURL + Url;
+     Url = "http://" + DISearchURL_e14 + Url;
   return Url;
 }
 
@@ -362,7 +409,11 @@ void Clear(void)
   DIProductSel = -1;
 }
 
-int Search(string key, int search_type)
+/////
+///// element14 API specific
+/////
+
+int Search_e14(string key, int search_type)
 {
    string customerID = "CadSoft2", customerPW = "CadSoft2";  // Dummy credentials
    string localKey = key, offset = I2Str(DISearchOffset);
@@ -399,7 +450,7 @@ int Search(string key, int search_type)
                   "   <v1:userInfo>\n"
                   "     <v1:signature>" + Signature + "</v1:signature>\n"
                   "     <v1:timestamp>" + TimeStamp + "</v1:timestamp>\n"
-                  "     <v1:locale>" + DILanguage + "_" + DICountry + "</v1:locale>\n"
+                  "     <v1:locale>" + DILanguage + "_" + DICountry_e14 + "</v1:locale>\n"
                   "   </v1:userInfo>\n"
                   "   <v1:accountInfo>\n"
                   "     <v1:customerId>" + customerID + "</v1:customerId>\n"
@@ -430,7 +481,7 @@ int Search(string key, int search_type)
       output("fdlQuery.html", "wb") printf("%s", Query);
 
    // Here we go !
-   int rv = netpost(DISearchResult, GetDesignLinkURL() + "?callinfo.apiKey=" +
+   int rv = netpost(DISearchResult, GetDesignLinkURL_e14() + "?callinfo.apiKey=" +
                     strsub("sf4kqy6u29tkt95gg5a3wej" + 122 + Signature, 0, 24), Query);
 
    if (DIDebugXfer)
@@ -449,14 +500,14 @@ int Search(string key, int search_type)
       }
       if (FaultString)
          DISearchResult = FaultString;
-      sprintf(DIHtml, tr("Fehler bei Zugriff auf") + " '%s':\n\n%s\n\n%s", GetDesignLinkURL(), neterror(), DISearchResult);
+      sprintf(DIHtml, tr("Fehler bei Zugriff auf") + " '%s':\n\n%s\n\n%s", GetDesignLinkURL_e14(), neterror(), DISearchResult);
       DISearchResult = "";
       return 0;
    }
    return 1;
 }
 
-int FilteredSearch(string key, int search_type)
+int FilteredSearch_e14(string key, int search_type)
 {
    int nrUnfiltProducts;
    string unfiltProducts[];
@@ -470,7 +521,7 @@ int FilteredSearch(string key, int search_type)
    if (nrProductsTarget < DINrProducts) return 1;
 
    while ((DISearchOffset < DINrAccessibleProducts || DISearchOffset == 0) && DINrProducts < nrProductsTarget) {
-      ret = Search(key, search_type);
+      ret = Search_e14(key, search_type);
       if (ret == 0 || strlen(DISearchResult) <= 1) break;
       DINrProductsTotal = strtol(xmltext(DISearchResult, "soapenv:Envelope/soapenv:Body/ns1:" +
                                          (search_type == DISearchByKeyword ? "keywordSearchReturn" : "premierFarnellPartNumberReturn") +
@@ -495,7 +546,7 @@ int FilteredSearch(string key, int search_type)
    return ret;
 }
 
-void Result2List(void)
+void Result2List_e14(void)
 {
    if (strlen(DISearchResult) <= 1)
       return;
@@ -532,7 +583,7 @@ void Result2List(void)
 }
 
 // Display HTML content.
-void ShowSelection(void)
+void ShowSelection_e14(void)
 {
   int huge_quantity = 1000000; // Indicator for "or higher"...
 
@@ -587,7 +638,7 @@ void ShowSelection(void)
               ;
 
      DIHtml +=  "<h2>" + xmltext(p, "ns1:products/ns1:displayName") + "</h2>";
-     string ImageUrl = GetImageURL(xmltext(p, "ns1:products/ns1:image/ns1:baseName"), 1, xmltext(p, "ns1:products/ns1:image/ns1:vrntPath")),
+     string ImageUrl = GetImageURL_e14(xmltext(p, "ns1:products/ns1:image/ns1:baseName"), 1, xmltext(p, "ns1:products/ns1:image/ns1:vrntPath")),
             DataSheet = xmlelement(p, "ns1:products/ns1:datasheets");
      DIHtml +=  "<table>\n"
                 " <tr>\n"
@@ -598,7 +649,7 @@ void ShowSelection(void)
      if (DataSheet)
         DIHtml +=
               "   <p>\n"
-              "    <a href=\"" + GetDataSheetURL(xmltext(DataSheet, "ns1:datasheets/ns1:url")) + "\">\n"
+              "    <a href=\"" + GetDataSheetURL_e14(xmltext(DataSheet, "ns1:datasheets/ns1:url")) + "\">\n"
               "    " + xmltext(DataSheet, "ns1:datasheets/ns1:description") + "</a>\n"
               "   </p>\n";
      DIHtml +=  "  </td>\n"
@@ -647,7 +698,7 @@ void ShowSelection(void)
               "    </tr>\n"
               "    <tr>\n"
               "     <td class=\"tabledata\">\n"
-              "      <h4>Price (" + DICurrency + ")</h4>\n"
+              "      <h4>Price (" + DICurrency_e14 + ")</h4>\n"
               "      <table width=\"100\%\" style=\"background:#FFFFFF\">\n"
               "       <tr>\n"
               "        <th width=\"44\%\">Qty</th>\n"
@@ -662,6 +713,325 @@ void ShowSelection(void)
               " </tr>\n"
               "</table>\n";
      }
+}
+
+/////
+///// Mouser API specific
+/////
+
+int Search_mouser(string key, int search_type)
+{
+   string localKey = key, offset = I2Str(DISearchOffset);
+   string search_options = "RohsAndInStock";
+
+   if (search_type == DISearchByKeyword) {
+      // Replace special characters with according XML notation.
+      string StrRepl[] = { // string replacements
+         "&", "&amp;",     // has to be the first one!
+         "<", "&lt;",
+         ">", "&gt;"
+      };
+      int o = 0;
+      for (int x = 0; StrRepl[x]; ) {
+         o = strstr(localKey, StrRepl[x], o);
+         if (o >= 0) {
+            localKey = strsub(localKey, 0, o) + StrRepl[x + 1] + strsub(localKey, o + strlen(StrRepl[x]));
+            o += strlen(StrRepl[x + 1]);
+         }
+         else {
+            x += 2;
+            o = 0;
+         }
+      }
+      // Store current user settings in Eaglerc
+      cfgset("ULP:designlink.InStock", DIInStock ? "1" : "0");
+      cfgset("ULP:designlink.RoHS",    DIRoHS    ? "1" : "0");
+
+      if (DIInStock && !DIRoHS)
+          search_options = "InStock";
+      else if (!DIInStock && DIRoHS)
+          search_options = "Rohs";
+      else if (!DIInStock && !DIRoHS)
+          search_options = "None";
+   }
+
+   string query, url;
+   query = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+
+   if (search_type == DISearchByKeyword) {
+       query += "<SearchByKeywordRequestRoot>\n";
+       query += "   <SearchByKeywordRequest>\n";
+       query += "       <keyword>" + localKey + "</keyword>\n";
+       query += "       <records>" + I2Str(0) + "</records>\n";
+       query += "       <startingRecord>" + offset + "</startingRecord>\n";
+       query += "       <searchOptions>" + search_options + "</searchOptions>\n";
+       //query += " <searchWithYourSignUpLanguage>string</searchWithYourSignUpLanguage>\n";
+       query += "   </SearchByKeywordRequest>\n";
+       query += "</SearchByKeywordRequestRoot>\n";
+
+       sprintf(url, "%s/search/keyword?apiKey=%s",
+               MOUSER_API_URL, MOUSER_SRCH_API_KEY);
+   } else {
+       query += "<SearchByPartRequestRoot>\n";
+       query += "   <SearchByPartRequest>\n";
+       query += "       <mouserPartNumber>" + localKey + "</mouserPartNumber>\n";
+       // None | Exact | BeginsWith
+       query += "       <partSearchOptions>Exact</partSearchOptions>\n";
+       query += "   </SearchByPartRequest>\n";
+       query += "</SearchByPartRequestRoot>\n";
+
+       sprintf(url, "%s/search/partnumber?apiKey=%s",
+               MOUSER_API_URL, MOUSER_SRCH_API_KEY);
+   }
+
+   int rv = netpost(DISearchResult, url, query, 20, "application/xml");
+
+   if (DIDebugXfer) {
+       output("fdlQuery.html", "wb") printf("%s\n\n%s", url, query);
+       output("fdlResponse.html", "wb") printf("%s", DISearchResult);
+   }
+
+   // TODO: properly handle 'rv' error and <Error> in response!
+   //  xmltext(DISearchResult, "SearchResponseRoot/Errors/ErrorEntity/Message");
+
+    return rv;
+}
+
+int FilteredSearch_mouser(string key, int search_type)
+{
+   int nrUnfiltProducts;
+   string unfiltProducts[];
+   int nrProductsTarget;
+   int ret = 1;
+
+   if (DIInStock != DIInStockBef || DIRoHS != DIRoHSBef || key != DISearchKeyBef)
+      Clear();
+
+   nrProductsTarget = DIProductOffset + DINrProductsPerPage;
+   if (nrProductsTarget < DINrProducts) return 1;
+
+   while ((DISearchOffset < DINrAccessibleProducts || DISearchOffset == 0) && DINrProducts < nrProductsTarget) {
+      ret = Search_mouser(key, search_type);
+      if (ret == 0 || strlen(DISearchResult) <= 1) break;
+      DINrProductsTotal = strtol(xmltext(DISearchResult,
+                                         "SearchResponseRoot/SearchResults/NumberOfResult"));
+
+      DINrAccessibleProducts = min(500, DINrProductsTotal);
+      DINrProducts = xmlelements(DIProducts, DISearchResult,
+                                 "SearchResponseRoot/SearchResults/Parts/MouserPart");
+
+      DISearchOffset += DINrProductsPerPage;
+      if (search_type != DISearchByKeyword) break; // No repeated search nec. because no filtering
+   }
+   // Remember settings
+   DIInStockBef = DIInStock;
+   DIRoHSBef = DIRoHS;
+   DISearchKeyBef = key;
+
+   return ret;
+}
+
+void Result2List_mouser(void)
+{
+   if (strlen(DISearchResult) <= 1)
+      return;
+   DINrProductsInList = min(DINrProducts - DIProductOffset, DINrProductsPerPage);
+   DIProductList[DINrProductsInList] = "";
+   for (int i = DINrProductsInList; --i >= 0; ) {
+      int prIdx = DIProductOffset + i;
+      string Prices[];
+      int nrPrices = xmlelements(Prices, DIProducts[prIdx], "MouserPart/PriceBreaks/Pricebreak");
+      numeric string Price;
+      for (int j = 0; j < nrPrices; j++) {
+         numeric string p1 = xmltext(Prices[j], "Pricebreak/Price");
+         // Takes the highest price
+         if (p1 && (!Price || p1 > Price))
+            Price = p1;
+      }
+
+      string available_str = xmltext(DIProducts[prIdx], "MouserPart/Availability");
+
+      int available = strtol(available_str);
+
+      // Mark 'on order' as negative for easy sorting
+      if (strstr(strlwr(available_str), "in stock") >= 0)
+          ;
+      else if (strstr(strlwr(available_str), "on order") >= 0)
+          available = -available;
+      else
+          available = 0;
+
+      DIProductList[i] =
+          xmltext(DIProducts[prIdx], "MouserPart/MouserPartNumber") + "\t"
+        + xmltext(DIProducts[prIdx], "MouserPart/Manufacturer") + "\t"
+        + xmltext(DIProducts[prIdx], "MouserPart/ManufacturerPartNumber") + "\t"
+        + I2Str(available) + "\t"
+        + Price + "\t"
+        + xmltext(DIProducts[prIdx], "MouserPart/Description");
+   }
+  // Update result info
+  DIResInfo = "";
+  if (DINrProductsInList > 0)
+     // Rounded or exact value, dependent on where we are
+     sprintf(DIResInfo, "%d - %d " + tr("von") +
+             (DISearchOffset >= DINrProductsTotal ? "" : " ~") + " %d " + tr("Ergebnissen"),
+             DIProductOffset + 1, DIProductOffset + DINrProductsInList,
+             DISearchOffset >= DINrProductsTotal ? DINrProducts : DINrProductsTotal/10 * 10);
+   DIProductSel = -2; // the first item after sort
+}
+
+void ShowSelection_mouser(void)
+{
+  if (!DINrProducts) {
+     DIHtml = tr("Keine Treffer.") + "<p>\n";
+     DIHtml += DIAdvice;
+     return;
+     }
+  if (DIProductSel < 0)
+     return;
+
+  string p = DIProducts[DIProductOffset + DIProductSel];
+  if (p) {
+     string Attributes[];
+     int nAttributes = xmlelements(Attributes, p, "MouserPart/ProductAttributes");
+
+     string AttributeList;
+     for (int i = 0; i < nAttributes; ++i)
+         AttributeList += "    <li> " + xmltext(Attributes[i], "ProductAttribute/AttributeName")
+                               + ": " + xmltext(Attributes[i], "ProductAttribute/AttributeValue")
+                                      + "</li>\n";
+     string PricesList;
+     {
+       string Prices[];
+       int nPrices = xmlelements(Prices, p, "MouserPart/PriceBreaks/Pricebreak");
+       for (int j = 0; j < nPrices; ++j) {
+           string Cost = xmltext(Prices[j], "Pricebreak/Price");
+           if (Cost) {
+              string n = xmltext(Prices[j], "Pricebreak/Quantity");
+              PricesList += "       <tr>\n"
+                            "        <td>" + n + "</td>\n"
+                            "        <td>" + Cost + "</td>\n"
+                            "       </tr>\n";
+              }
+           }
+     }
+     DIHtml = "<style type=\"text/css\">\n"
+              " .tableblock {\n"
+              "     background-color: #A0A0A0;\n"
+              " }\n"
+              " .tabledata {\n"
+              "     background-color: #F0F0F0;\n"
+              "     padding: 2;\n"
+              " }\n"
+              "</style>\n"
+              ;
+
+     DIHtml +=  "<h2>" + xmltext(p, "MouserPart/Description") + "</h2>";
+     string ImageUrl = xmltext(p, "MouserPart/ImagePath"),
+            DataSheet = xmltext(p, "MouserPart/DataSheetUrl"),
+            DetailedUrl = xmltext(p, "MouserPart/ProductDetailUrl");
+     DIHtml +=  "<table>\n"
+                " <tr>\n"
+                "  <td>\n";
+     if (ImageUrl)
+        DIHtml +=
+              "   <img src=\"" + ImageUrl + "\">\n";
+     if (DataSheet)
+        DIHtml +=
+              "   <p>\n"
+              "    <a href=\"" + DataSheet + "\">\nDatasheet</a>\n"
+              "   </p>\n";
+     if (DetailedUrl)
+        DIHtml +=
+              "   <p>\n"
+              "    <a href=\"" + DetailedUrl + "\">\nProduct detail on Mouser</a>\n"
+              "   </p>\n";
+     DIHtml +=  "  </td>\n"
+              "  <td>\n"
+              "   <dl>\n"
+              "    <dt>Manufacturer:</dt>\n"
+              "    <dd style=\"text-align: left;\">" + xmltext(p, "MouserPart/Manufacturer") + "</dd>\n"
+              "    <dt>Order Code:</dt>\n"
+              "    <dd>" + xmltext(p, "MouserPart/MouserPartNumber") + "</dd>\n"
+              "    <dt>Manufacturer Part No:</dt>\n"
+              "    <dd>" + xmltext(p, "MouserPart/ManufacturerPartNumber") + "</dd>\n"
+              "   </dl>\n"
+              "   <p>RoHS: <strong>  "  + xmltext(p, "MouserPart/ROHSStatus") + "</strong></p>\n"
+              "   <dl>\n"
+              "    <dt>Description</dt>\n"
+              "   </dl>\n"
+              "   <ul>\n"
+              "    <li>" + xmltext(p, "MouserPart/Description") + "</li>\n"
+                   + AttributeList +
+              "   </ul>\n"
+              "  </td>\n"
+              "  <td>\n"
+              "   <table class=\"tableblock\">\n"
+              "    <tr>\n"
+              "     <td class=\"tabledata\">\n"
+              "      <h4>Availability</h4>\n"
+              "      <table width=\"100\%\" style=\"background:#FFFFFF\">\n"
+              "       <tr>\n"
+              "        <td>\n"
+              "         <p>\n"
+              "          <b>Availability</b>: " + xmltext(p, "MouserPart/Availability") + "<br>\n"
+              "         </p>\n"
+              "         <p>\n"
+              "          <b>Minimum Order Quantity:</b> " + xmltext(p, "MouserPart/Min") +
+              "         </p>\n"
+              "         <p>\n"
+              "          <b>Order Multiple:</b> " + xmltext(p, "MouserPart/Mult") +
+              "         </p>\n"
+              "        </td>\n"
+              "       </tr>\n"
+              "      </table>\n"
+              "     </td>\n"
+              "    </tr>\n"
+              "    <tr>\n"
+              "     <td class=\"tabledata\">\n"
+              "      <h4>Price</h4>\n"
+              "      <table width=\"100\%\" style=\"background:#FFFFFF\">\n"
+              "       <tr>\n"
+              "        <th width=\"44\%\">Qty</th>\n"
+              "        <th>List Price</th>\n"
+              "       </tr>\n"
+                      + PricesList +
+              "      </table>\n"
+              "     </td>\n"
+              "    </tr>\n"
+              "   </table>\n"
+              "  </td>\n"
+              " </tr>\n"
+              "</table>\n";
+     }
+}
+
+/////
+///// Generic
+/////
+
+int FilteredSearch(string key, int search_type)
+{
+    if (DIUseMouserAPI)
+        return FilteredSearch_mouser(key, search_type);
+
+    return FilteredSearch_e14(key, search_type);
+}
+
+void Result2List(void)
+{
+    if (DIUseMouserAPI)
+        Result2List_mouser();
+    else
+        Result2List_e14();
+}
+
+void ShowSelection(void)
+{
+    if (DIUseMouserAPI)
+        ShowSelection_mouser();
+    else
+        ShowSelection_e14();
 }
 
 // Only search by keyword
@@ -749,9 +1119,9 @@ string SingleSearch(int dlg_mode, string dlg_head, string description, string im
     if (ok) ShowSelection(); // Prepares Html string for display
     int dlg_ret = dlgDialog(dlg_head) {
       dlgVBoxLayout {
-        if (dlg_mode == DIModeLbrSearch) {
-          dlgLabel("<b>" + tr("Suche nach ") + (DICountry == "US" ? "NEWARK" : "FARNELL") +
-                   " Code </b>(" + GetDesignLinkURL() + ")");
+        if (!DIUseMouserAPI && dlg_mode == DIModeLbrSearch) {
+          dlgLabel("<b>" + tr("Suche nach ") + (DICountry_e14 == "US" ? "NEWARK" : "FARNELL") +
+                   " Code </b>(" + GetDesignLinkURL_e14() + ")");
         }
         dlgHBoxLayout dlgSpacing(800);
         dlgHBoxLayout {

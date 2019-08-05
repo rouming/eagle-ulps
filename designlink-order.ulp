@@ -43,10 +43,13 @@
 
 #include "designlink-inc.ulp"
 
-string Version = "1.0.7"; // 2010-08-13: Part of beta 5.10.1
+string Version = "1.0.8"; // 2010-08-13: Part of beta 5.10.1
                           // 2010-08-24: Checkbox Ordercode speichern
                           // 2010-08-30: Value und Package in Liste mit TAB getrennt, nicht mehr mit " "
                           //             clipDeviceDescription, nur Headerzeile anzeigen
+                          // 2019-08-03  1.0.8 r.peniaev@gmail.com
+                          //             Mouser API support
+
 
 if (DIVersion != Version)
   dlgMessageBox(tr("Verschiedene Versionen von ") + filename(argv[0]) + " (" + Version + ") " +
@@ -74,6 +77,8 @@ string SchPartAttMF[];        // the existing Manufacturer name
 string SchPartAttMPN[];       // the existing Manufacturer Part Number
 int    PCBcount = 1;          // PCB multiplyer
 int    CntBasketLines = 0;    // positions to order
+string PartCodeInBasket[];
+int    PartCntInBasket[];
 int    CntInStock = 0;
 string NrPositions;
 numeric string PartCode[];
@@ -102,7 +107,50 @@ void DbgWritePartCode(void) {
 // End Debug stuff
 
 /************** Functions ****************************************************************/
+
+int AddToCart_mouser(void)
+{
+   string items;
+
+   if (!CntInStock)
+       return -1;
+
+   for (int i = 0; i < CntInStock; i++) {
+       items += "       <CartItemRequest>\n";
+       items += "           <MouserPartNumber>" + PartCodeInBasket[i] + "</MouserPartNumber>\n";
+       items += "           <Quantity>" + I2Str(PartCntInBasket[i])  + "</Quantity>\n";
+       items += "       </CartItemRequest>\n";
+   }
+
+   string query;
+   query = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+   query += "<CartItemRequestRoot>\n";
+   query += "   <CartKey>00000000-0000-0000-0000-000000000000</CartKey>\n";
+   query += "   <CartItems>\n";
+   query += items;
+   query += "   </CartItems>\n";
+   query += "</CartItemRequestRoot>\n";
+
+   string url;
+   sprintf(url, "%s/cart/items/insert?apiKey=%s",
+           MOUSER_API_URL, MOUSER_CART_API_KEY);
+
+   string response;
+   int rv = netpost(response, url, query, 20, "application/xml; charset=utf-8");
+
+   if (DIDebugXfer) {
+       output("fdlQuery.html", "wb") printf("%s\n%s", url, query);
+       output("fdlResponse.html", "wb") printf("%s", response);
+   }
+
+   // TODO: properly handle 'rv' error and <Error> in response!
+   //  xmltext(response, "SearchResponseRoot/Errors/ErrorEntity/Message");
+
+   return rv;
+}
+
 string GetBasket() {  // 2010-08-09 alf
+
   string basket;
   CntBasketLines = 0;
   CntInStock = 0;
@@ -118,6 +166,8 @@ string GetBasket() {  // 2010-08-09 alf
       CntBasketLines++;
       // Bestellen, wenn das Produkt auf Lager ist !
       if (availcnt > 0) {
+        PartCodeInBasket[CntInStock] = OrderCode[n];
+        PartCntInBasket[CntInStock] = partcnt;
         CntInStock++;
         string h;
         sprintf(h, "%s%s~%d", firsttilde, OrderCode[n], partcnt);
@@ -133,7 +183,7 @@ string GetBasket() {  // 2010-08-09 alf
          );
   string xbasket;
   sprintf(xbasket, "<b><a href=\"http://%s/jsp/extlink.jsp?action=buy&product=%s~\\&CMP=GRHB-CADSOFT\">%s </b>",
-          DIShoppingURL, basket, tr("Zum Warenkorb hinzufügen"));
+          DIShoppingURL_e14, basket, tr("Zum Warenkorb hinzufügen"));
   return xbasket;
 }
 
@@ -144,9 +194,14 @@ string GetShoppingURL() {
     string s[];
     strsplit(s, DIProductList[DIProductSel], '\t');
     order_str = s[0] + "~1";  // Only one piece
-  }
+    PartCodeInBasket[0] = DIProductList[DIProductSel];
+    PartCntInBasket[0] = 1;
+    CntInStock = 1;
+  } else
+      CntInStock = 0;
+
   sprintf(url, "<b><a href=\"http://%s/jsp/extlink.jsp?action=buy\&product=%s~\\&CMP=GRHB-CADSOFT\">%s</b>",
-          DIShoppingURL, order_str, tr("Selektion zum Warenkorb hinzufügen"));
+          DIShoppingURL_e14, order_str, tr("Selektion zum Warenkorb hinzufügen"));
   return url;
 }
 
@@ -481,7 +536,7 @@ if (schematic && (!OptGeneral)) {
     }
     GetOrderCode();
     if (DIDebug) DbgWritePartCode();
-    string basket = GetBasket();
+    string basket_e14 = GetBasket();
     int pcsel = -1;
     sprintf(NrPositions, "%s%d   %s%d   %s%d", tr("Anzahl Positionen: "), CntSchPart,
             tr("Mit Ordercodes: "), CntBasketLines,  tr("Auf Lager: "), CntInStock);
@@ -492,7 +547,7 @@ if (schematic && (!OptGeneral)) {
         dlgVBoxLayout {
           dlgListView(PartCodeHeader, PartCode, pcsel) {
             NewSearch(pcsel);
-            basket = GetBasket();  // Warenkorb aktualisieren
+            basket_e14 = GetBasket();  // Warenkorb aktualisieren
           }
           dlgLabel(tr("Zur Detailansicht oder erneuten Suche der Artikel bitte diese doppelklicken !"));
           dlgHBoxLayout {
@@ -500,7 +555,7 @@ if (schematic && (!OptGeneral)) {
             dlgIntEdit(PCBcount, 1, 1000000);
             dlgPushButton(tr("Aktualisieren")) {
               UpdateQuantity(PCBcount);
-              basket = GetBasket();
+              basket_e14 = GetBasket();
             }
             dlgSpacing(10);
             dlgVBoxLayout {
@@ -510,7 +565,14 @@ if (schematic && (!OptGeneral)) {
             dlgSpacing(10);
             dlgVBoxLayout {
               dlgHBoxLayout dlgSpacing((DIDlgLang = "de") ? 160 : 150);
-              dlgLabel(basket, 1);
+
+              if (DIUseMouserAPI) {
+                  dlgPushButton(tr("Zum Warenkorb hinzufügen")) {
+                      AddToCart_mouser();
+                  };
+              } else {
+                  dlgLabel(basket_e14, 1);
+              }
             }
             dlgCheckBox(tr("Ordercodes speichern"), saveatt);
             dlgPushButton(tr("Exportieren") + "...") {
@@ -547,7 +609,7 @@ else if (OptGeneral) {
    DIMode = 0;  // Display search message
    dlgDialog(DICompany + " DesignLink " + tr("allgemeine Suche")) {
       string keyword = "";
-      string url = GetShoppingURL();
+      string url_e14 = GetShoppingURL();
       dlgVBoxLayout {
          dlgHBoxLayout dlgSpacing(800);
          dlgHBoxLayout {
@@ -557,7 +619,7 @@ else if (OptGeneral) {
          dlgListView(DIProductListHead, DIProductList, DIProductSel)
             if (dlgSelectionChanged()) {
                ShowSelection();
-               url = GetShoppingURL();
+               url_e14 = GetShoppingURL();
             }
          dlgHBoxLayout {
             dlgCheckBox(tr("Vorrätig"), DIInStock);
@@ -567,14 +629,14 @@ else if (OptGeneral) {
                if (DIProductOffset > 0) {
                   DIProductOffset -= DINrProductsPerPage;
                   DoSearch(keyword);
-                  url = GetShoppingURL();
+                  url_e14 = GetShoppingURL();
                }
             dlgLabel(DIResInfo, 1);
             dlgPushButton(tr("Nächste"))
                if (DIProductOffset + DINrProductsPerPage < DINrAccessibleProducts) {
                   DIProductOffset += DINrProductsPerPage;
                   DoSearch(keyword);
-                  url = GetShoppingURL();
+                  url_e14 = GetShoppingURL();
                }
                else
                   dlgMessageBox(tr("Keine weiteren Produkte verfügbar!"));
@@ -582,7 +644,14 @@ else if (OptGeneral) {
               dlgHBoxLayout dlgSpacing(238);
               dlgHBoxLayout {
                 dlgSpacing(35);
-                dlgLabel(url, 1);
+
+                if (DIUseMouserAPI) {
+                    dlgPushButton(tr("Selektion zum Warenkorb hinzufügen")) {
+                        AddToCart_mouser();
+                    };
+                } else {
+                    dlgLabel(url_e14, 1);
+                }
               }
             }
          }
@@ -590,7 +659,7 @@ else if (OptGeneral) {
             dlgStringEdit(keyword, DISearchHist, 9);
             dlgPushButton(tr("+Suchen")) {
                DoSearch(keyword);
-               url = GetShoppingURL();
+               url_e14 = GetShoppingURL();
             }
             dlgPushButton(tr("Beenden")) dlgReject();
          }
