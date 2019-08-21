@@ -330,8 +330,10 @@ void GetOrderCode(void) {
                  );
         }
         else {
-          OrderCode[n] = DIUnknown;
-          SchPartAttOC[n] = DIUnknown;
+          if (!OrderCode[n])
+              OrderCode[n] = DIUnknown;
+          if (!SchPartAttOC[n])
+              SchPartAttOC[n] = DIUnknown;
           sprintf(PartCode[n], "%d\t%s\t%s\t%s\t%s\t%s\t\t\t\t%s",  // 2010-08-27 Space zu TAB geändert
                                SchQuantPart[n],
                                SchPartValue[n], SchPartPackage[n],
